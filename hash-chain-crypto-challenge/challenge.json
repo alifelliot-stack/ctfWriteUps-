@@ -1,0 +1,25 @@
+{
+  "stage1": {
+    "salt": "271dfde09d4eab2f",
+    "hash": "c7e5015f9f3b25df3353dd3ba649fcebf5dc54c2de73ccf80aa63812a707a088",
+    "algo": "sha256(salt + word)",
+    "keyspace": "wordlist.txt (dictionary attack)"
+  },
+  "stage2": {
+    "salt": "2539db7e3c867caf",
+    "hash": "a0df1c9998f8e0132b8de4e9acc6cbbd59492c9677a871c560135c17f0688f60",
+    "algo": "sha256(salt + word1 + pin)",
+    "keyspace": "000000-999999"
+  },
+  "stage3": {
+    "salt": "32ea462a75f08736",
+    "hash": "e19c625982734887917af10a196d2e35",
+    "algo": "md5(sha1(salt + word1 + pin2 + token3))",
+    "keyspace": "[a-z0-9]{4}"
+  },
+  "final": {
+    "salt": "4124478c8a9d414b",
+    "ciphertext_hex": "ebb43fe40006443b1a137d8bb12d13461cc2916f71e182995589d4beb9910a495bb0bc8bcabfed471b26",
+    "algo": "key = sha256^200000(salt + word1 + pin2 + token3); flag = ciphertext XOR HMAC-SHA256-CTR-keystream(key)"
+  }
+}
