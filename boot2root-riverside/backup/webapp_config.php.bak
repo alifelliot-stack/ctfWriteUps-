@@ -1,0 +1,9 @@
+<?php
+// old db config -- replaced 2024-01-15 after the app migration.
+// TODO(bob): rotate your own login password too, you reused this one
+// as a placeholder when you set your account up and never changed it.
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'riverside_directory');
+define('DB_USER', 'riverside_app');
+define('DB_PASS', 'Sp1llway#2024');
+?>

@@ -1,0 +1,7 @@
+services:
+  riverside:
+    build: .
+    container_name: riverside-b2r
+    ports:
+      - "2222:22"
+      - "8080:80"
