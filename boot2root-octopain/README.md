@@ -30,6 +30,41 @@ planted in the notes → SSH in → local privesc to root.
 
 ---
 
+## Start here — step by step (what we actually observed)
+
+1. **Add the hostname, then curl the apex:**
+   ```bash
+   export IP=10.0.27.66
+   echo "$IP octopus.garden" | sudo tee -a /etc/hosts
+   curl -s -I http://octopus.garden/
+   ```
+   **Observed:** still `HTTP/1.1 403 Forbidden`, `Content-Length: 162` (nginx default
+   forbidden page). The apex is forbidden *on purpose* — adding the hostname is not
+   enough. That means the real app is almost certainly on a **subdomain** (same pattern
+   as HTB "Nexus", which hid `git.nexus.htb`).
+
+2. **Don't bother with whatweb on this pwnbox** — it's a broken install
+   (`cannot load such file -- /usr/bin/lib/...`). Fingerprint with curl/nuclei instead,
+   once we can actually reach the app.
+
+3. **Fuzz for the subdomain** (this is the key step), filtering out every 403:
+   ```bash
+   ffuf -w ~/tools/SecLists/Discovery/DNS/subdomains-top1million-5000.txt:FUZZ \
+     -u http://octopus.garden/ -H "Host: FUZZ.octopus.garden" -fc 403
+   # wordlist may instead be at /usr/share/seclists/Discovery/DNS/...
+   ```
+   `-fc 403` hides the forbidden noise, so anything that appears is a real vhost
+   (watch for `git`, `wiki`, `dev`, `notes`, `blog`).
+
+4. **Add the found vhost and browse it:**
+   ```bash
+   echo "$IP THATNAME.octopus.garden" | sudo tee -a /etc/hosts
+   curl -s -I http://THATNAME.octopus.garden/
+   ```
+   Then open it in Firefox and read everything. From here, follow sections 2–7 below.
+
+---
+
 ## 1. Set the hostname (do this before anything else)
 
 ```bash
@@ -97,9 +132,9 @@ cd loot_git && git log -p | grep -iE 'pass|user|key'
 ## 4. Subdomain / vhost sweep (there may be more than one)
 
 ```bash
-# baseline the normal response size first, then filter it out with -fs
+# the apex 403s, so just filter out status 403 and keep whatever's left
 ffuf -u http://octopus.garden/ -H "Host: FUZZ.octopus.garden" \
-  -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -fs <size>
+  -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -fc 403
 # add any hit to /etc/hosts and enumerate it too
 ```
 
