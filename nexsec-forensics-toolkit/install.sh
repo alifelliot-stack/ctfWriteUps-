@@ -47,6 +47,44 @@ pipx install eml-analyzer 2>/dev/null || pip install --user --break-system-packa
 say "sigma-cli (inspect / convert Sigma rules)"
 pipx install sigma-cli 2>/dev/null || pip install --user --break-system-packages sigma-cli
 
+# ---- Make everything runnable from anywhere --------------------------
+# Put the pipx bin dir on PATH, and install a global 'nexsec-tools'
+# command plus the toolkit folder so you can call it from any directory.
+say "Wiring tools into PATH so they run from anywhere"
+
+BIN_DIR="/usr/local/bin"
+SHARE_DIR="/usr/local/share/nexsec-forensics-toolkit"
+SRC_DIR="$(cd "$(dirname "$0")" && pwd)"   # folder this script lives in
+
+# 1) pipx tools live in ~/.local/bin - make sure it is on PATH for good
+for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  [ -f "$rc" ] || continue
+  grep -q '.local/bin' "$rc" 2>/dev/null || \
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
+done
+export PATH="$HOME/.local/bin:$PATH"
+
+# 2) copy the whole toolkit folder to a shared location
+sudo mkdir -p "$SHARE_DIR"
+sudo cp -f "$SRC_DIR"/install.sh "$SRC_DIR"/TOOLS.md "$SRC_DIR"/README.md "$SHARE_DIR"/ 2>/dev/null || true
+
+# 3) global command: type 'nexsec-tools' anywhere to read the reference,
+#    'nexsec-tools check' to see what is installed, 'nexsec-tools install' to re-run setup
+sudo tee "$BIN_DIR/nexsec-tools" >/dev/null <<'WRAP'
+#!/usr/bin/env bash
+SHARE_DIR="/usr/local/share/nexsec-forensics-toolkit"
+case "${1:-ref}" in
+  check)
+    for t in tshark sqlitebrowser tree mtype diec hashdeep autoit-ripper eml-analyzer sigma; do
+      command -v "$t" >/dev/null && echo "have: $t" || echo "need: $t"
+    done ;;
+  install) bash "$SHARE_DIR/install.sh" ;;
+  *) ${PAGER:-less} "$SHARE_DIR/TOOLS.md" ;;
+esac
+WRAP
+sudo chmod +x "$BIN_DIR/nexsec-tools"
+say "Installed 'nexsec-tools' to $BIN_DIR (run it from any folder)"
+
 # ---- Manual / not-in-apt --------------------------------------------
 warn "Manual installs (not in apt, see TOOLS.md for details):"
 warn "  CyberChef  - usually pre-installed on the NexSec pwnbox at /opt/CyberChef"
@@ -54,5 +92,9 @@ warn "               else download the standalone .zip from gchq.github.io/Cyber
 warn "  Splunk     - free tier, heavy. Download from splunk.com. grep/awk works for small logs"
 warn "  VirusTotal - web service (virustotal.com). Optional CLI: 'vt' from VirusTotal/vt-cli"
 
-say "Done. Run the checker below to confirm what landed:"
-echo '  for t in tshark sqlitebrowser tree mtype diecl hashdeep autoit-ripper eml-analyzer sigma; do command -v $t >/dev/null && echo "  OK  $t" || echo "  --  $t missing"; done'
+say "Done."
+say "Open a new terminal (or run: source ~/.bashrc) so PATH updates take effect."
+say "Then from ANY folder you can run:"
+echo "  nexsec-tools          # open the classified tools reference"
+echo "  nexsec-tools check    # see which tools are installed vs missing"
+echo "  nexsec-tools install  # re-run this setup"
