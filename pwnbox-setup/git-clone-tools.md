@@ -124,6 +124,14 @@ curl -sL "$url" -o ffuf.tgz && tar xzf ffuf.tgz ffuf && sudo mv ffuf /usr/local/
 ffuf -V        # should print a version
 ```
 
+**After this, call `ffuf` on its own — NOT `~/tools/ffuf`.** That path is still the
+folder; the working binary now lives in `/usr/local/bin`, which is already on `$PATH`:
+
+```bash
+ffuf -w ~/tools/SecLists/Discovery/DNS/bitquark-subdomains-top100000.txt:FUZZ \
+  -u http://octopus.garden/ -H "Host: FUZZ.octopus.garden" -fc 403
+```
+
 Same idea for gobuster / feroxbuster / nuclei: grab the release binary and move it
 into `/usr/local/bin` instead of running it out of a cloned source folder.
 
