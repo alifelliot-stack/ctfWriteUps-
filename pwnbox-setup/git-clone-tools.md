@@ -107,3 +107,29 @@ source ~/.bashrc
 
 > Prefer the one-shot installer (`tools-setup.sh`) when you just want everything;
 > use these `git clone` lines when apt/pipx is locked or you want the source.
+
+---
+
+## Troubleshooting
+
+### `bash: ~/tools/ffuf: Is a directory`
+`~/tools/ffuf` ended up as a folder (a git clone, or a tarball that extracted into
+a dir), so there's no binary to run at that path. Install the real binary to
+`/usr/local/bin` so you can just call `ffuf`:
+
+```bash
+cd /tmp
+url=$(curl -sL https://api.github.com/repos/ffuf/ffuf/releases/latest | grep -o 'https://[^"]*linux_amd64.tar.gz')
+curl -sL "$url" -o ffuf.tgz && tar xzf ffuf.tgz ffuf && sudo mv ffuf /usr/local/bin/
+ffuf -V        # should print a version
+```
+
+Same idea for gobuster / feroxbuster / nuclei: grab the release binary and move it
+into `/usr/local/bin` instead of running it out of a cloned source folder.
+
+### `whatweb: cannot load such file`
+The apt `whatweb` on this pwnbox is broken. Don't fix it. Clone and run it instead:
+```bash
+git clone --depth 1 https://github.com/urbanadventurer/WhatWeb.git ~/tools/WhatWeb
+ruby ~/tools/WhatWeb/whatweb http://octopus.garden/
+```
