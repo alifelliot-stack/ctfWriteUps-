@@ -75,6 +75,25 @@ planted in the notes → SSH in → local privesc to root.
      -u http://octopus.garden/FUZZ -fc 403
    ```
 
+### RUN CEPAT (box lembab / lalu VPN)
+
+Box ni di-share ramai team + lalu VPN, jadi ffuf senang tersekat (`0 req/sec`).
+Guna list kecik + had thread + timeout supaya tak hang. Panggil `ffuf` terus
+(bukan `~/tools/ffuf`).
+
+```bash
+# 1) subdomain — list kecik, laju
+ffuf -w ~/tools/SecLists/Discovery/DNS/subdomains-top1million-5000.txt:FUZZ \
+  -u http://octopus.garden/ -H "Host: FUZZ.octopus.garden" -fc 403 -t 20 -timeout 7
+
+# 2) directory brute kat apex — selalunya ni yang kena (app duduk kat /path)
+ffuf -w ~/tools/SecLists/Discovery/Web-Content/common.txt:FUZZ \
+  -u http://octopus.garden/FUZZ -fc 403 -t 20 -timeout 7
+```
+
+Fokus (2) dulu — `common.txt` kecik (~4700 word) jadi habis cepat walau box slow.
+Cari baris `[Status: 200]` / `[Status: 301]` = folder app.
+
 ---
 
 ## 1. Set the hostname (do this before anything else)
