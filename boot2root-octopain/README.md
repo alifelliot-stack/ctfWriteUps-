@@ -63,6 +63,18 @@ planted in the notes → SSH in → local privesc to root.
    ```
    Then open it in Firefox and read everything. From here, follow sections 2–7 below.
 
+5. **No subdomain hit? Try a bigger list, then fall back to path fuzzing** — the app
+   might live on a `/path` of the apex instead of a subdomain:
+   ```bash
+   # bigger subdomain wordlist
+   ~/tools/ffuf -w ~/tools/SecLists/Discovery/DNS/bitquark-subdomains-top100000.txt:FUZZ \
+     -u http://octopus.garden/ -H "Host: FUZZ.octopus.garden" -fc 403
+
+   # brute directories straight on octopus.garden (app may be at a /path, not a subdomain)
+   ~/tools/ffuf -w ~/tools/SecLists/Discovery/Web-Content/directory-list-2.3-medium.txt:FUZZ \
+     -u http://octopus.garden/FUZZ -fc 403
+   ```
+
 ---
 
 ## 1. Set the hostname (do this before anything else)
