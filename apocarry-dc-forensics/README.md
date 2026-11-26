@@ -85,24 +85,23 @@ Get-WinEvent -LogName 'Microsoft-Windows-TerminalServices-RemoteConnectionManage
   } | Where-Object User -like '*svc-admin*'
 ```
 
-### Step D — Important: the RDP pair is NOT always the account that cleared logs
+### Step D — Watch for decoy RDP sessions
 
-`svc-admin` cleared the logs (the 1102 event), but Q1 asks for the `account + IPv4`
-that appears in **both** the Terminal Services records and the 4624 logons, i.e. the
-**RDP session** that precedes the wipe. In this incident the Terminal Services 1149
-record showed a different account:
+There is more than one RDP connection in the logs, and not all of them are the attacker.
+A 1149 record in this incident showed `it-helpdesk` / `192.168.77.5` at 04:54. **That is
+a decoy** — do not submit it. It does not line up with the session that wiped the logs.
+
+Anchor on the 1102 Logon ID instead (Step B). The 4624 for Logon ID `0x1dcb2` resolves to:
 
 ```
-Event 1149 (TerminalServices-RemoteConnectionManager)
-  Param1 (User) : it-helpdesk
-  Param3 (IP)   : 192.168.77.5
-  Logged        : 10/17/2026 04:54
+svc-admin / 192.168.77.3   (LogonType 10 = RDP)
 ```
 
-So the attacker RDP'd in as `it-helpdesk` from `192.168.77.5`, then later cleared logs
-as `svc-admin`. The answer pair is the RDP one: **`it-helpdesk` / `192.168.77.5`**.
+That same `svc-admin` + `192.168.77.3` also appears in a Terminal Services 1149 record
+and precedes the `winupdate.exe` prefetch run and the 1102 clear. So it is the pair in
+both sets and it fits the timeline.
 
-Verify that exact pair also exists as a 4624 Type 10 (every real RDP logon does):
+Verify the pair in the 4624 Type 10 set:
 
 ```powershell
 Get-WinEvent -FilterHashtable @{LogName='Security';Id=4624} | % {
@@ -110,21 +109,22 @@ Get-WinEvent -FilterHashtable @{LogName='Security';Id=4624} | % {
   $acct=($d|?{$_.Name -eq 'TargetUserName'}).'#text'
   $ip  =($d|?{$_.Name -eq 'IpAddress'}).'#text'
   $type=($d|?{$_.Name -eq 'LogonType'}).'#text'
-  if($acct -eq 'it-helpdesk' -and $ip -eq '192.168.77.5'){
+  if($acct -eq 'svc-admin' -and $ip -eq '192.168.77.3'){
     [pscustomobject]@{Time=$_.TimeCreated; Acct=$acct; Type=$type; IP=$ip} } }
 ```
 
-A returned row with `Type = 10` confirms it is in both sets. Check its time is before
-the `winupdate.exe` prefetch run and before the 1102 clear.
-
-### Step E — Flag
+### Step E — Flag (confirmed correct)
 
 ```
-nexsec26{it-helpdesk;192.168.77.5}
+nexsec2026{svc-admin;192.168.77.3}
 ```
 
-If a team's evidence shows different values, use the account and IPv4 from the 1149
-record that also matches a 4624 Type 10 and precedes the winupdate.exe run and 1102.
+> Note the accepted prefix is `nexsec2026{...}` (not `nexsec26{...}`).
+
+**Lesson:** do not assume the first 1149 record you open is the attacker. The box
+plants a decoy helpdesk RDP from a near-identical IP (`.5` vs `.3`). Always anchor on
+the 1102 Logon ID pivot, then confirm the pair in both the TS records and 4624 Type 10,
+and that it precedes winupdate.exe and the log clear.
 
 > The generic cross-reference method below reaches the same answer from scratch if you
 > have not found the 1102 event yet.
