@@ -257,4 +257,109 @@ the winupdate.exe run and the 1102 clear.
 | 1149 | TerminalServices-RemoteConnectionManager | RDP user authenticated (user + source IP) |
 | 21 / 22 / 25 | TerminalServices-LocalSessionManager | session logon / shell start / reconnect |
 | 4624 (Type 10) | Security | successful RemoteInteractive (RDP) logon |
+| 4624 (Type 3) | Security | successful Network logon (SMB / NTLM) |
 | 1102 | Security | audit log was cleared |
+
+---
+
+## More forensic questions
+
+### Q — Event 1102 Record ID + ATT&CK technique
+
+Read the `<EventRecordID>` from the 1102 event (Details tab -> **XML View**, under
+`<System>`), and map the log-clear behavior to MITRE ATT&CK.
+
+- Record ID (this incident): `11811`
+- Technique: `T1070.001` (Indicator Removal: **Clear Windows Event Logs**)
+
+How to map any behavior to a technique: describe it in plain words (clearing the event
+log = hiding tracks = Defense Evasion), search `attack.mitre.org` for the behavior or
+the Event ID. The T1070.001 page lists Windows Event ID 1102 as a detection source.
+
+**Flag:** `nexsec2026{11811;T1070.001}`
+
+### Q — exact Security-log clearing command
+
+Source: `ConsoleHost_history.txt` (PowerShell history). It contains three clear commands:
+
+```
+wevtutil cl Security
+wevtutil cl System
+wevtutil cl Application
+```
+
+`wevtutil cl <log>` clears a log. The Security-specific one:
+
+**Flag:** `nexsec2026{wevtutil cl Security}`  (if spaces are rejected: `nexsec2026{wevtutil_cl_Security}`)
+
+### Console history — full attacker sequence (context)
+
+```
+whoami
+tasklist | findstr lsass
+C:\Windows\Temp\winupdate.exe -sn 192.168.77.0/24        # network sweep of the /24
+wevtutil cl Security                                      # clear logs (T1070.001)
+wevtutil cl System
+wevtutil cl Application
+rundll32.exe C:\Windows\System32\comsvcs.dll, MiniDump 860 C:\Windows\Temp\lsass.dmp full
+```
+
+- `winupdate.exe -sn 192.168.77.0/24` -> host-discovery scan (network scanner family)
+- `rundll32 ... comsvcs.dll, MiniDump <pid> lsass.dmp full` -> LSASS credential dump,
+  ATT&CK **T1003.001** (OS Credential Dumping: LSASS Memory)
+
+### Q — winupdate.exe SHA-1 + tool family
+
+Static analysis only (never run the sample):
+
+```bash
+sha1sum winupdate.exe                                     # SHA-1
+exiftool winupdate.exe                                    # PE version info: OriginalFilename, ProductName
+strings -n 6 winupdate.exe | grep -iE 'scan|usage|version|http'   # tool banner / usage
+```
+Windows: `Get-FileHash -Algorithm SHA1 winupdate.exe`, and Properties -> Details tab for
+the version resource. The `-sn <cidr>` usage points to a network/host-discovery scanner.
+
+**Flag:** `nexsec2026{<sha1>;<toolname>}`
+
+### Q — earliest 4624 (svc-admin, Type 3, NTLM, 192.168.77.3) after the 1102 clear
+
+```powershell
+$clear = (Get-WinEvent -FilterHashtable @{LogName='Security';Id=1102} | Sort TimeCreated | Select -First 1).TimeCreated
+
+Get-WinEvent -FilterHashtable @{LogName='Security';Id=4624} | % {
+  $x=[xml]$_.ToXml(); $d=$x.Event.EventData.Data
+  [pscustomobject]@{
+    Time    = $_.TimeCreated
+    Record  = $_.RecordId
+    User    = ($d|?{$_.Name -eq 'TargetUserName'}).'#text'
+    Type    = ($d|?{$_.Name -eq 'LogonType'}).'#text'
+    Auth    = ($d|?{$_.Name -eq 'AuthenticationPackageName'}).'#text'
+    IP      = ($d|?{$_.Name -eq 'IpAddress'}).'#text'
+    LogonId = ($d|?{$_.Name -eq 'TargetLogonId'}).'#text'
+  }
+} | ? { $_.User -eq 'svc-admin' -and $_.Type -eq '3' -and $_.Auth -eq 'NTLM' -and $_.IP -eq '192.168.77.3' -and $_.Time -gt $clear } |
+  Sort Time | Select -First 1 | % {
+    "RecordID = $($_.Record)"
+    "LogonID  = $($_.LogonId)"
+    "UTC      = $($_.Time.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+  }
+```
+
+GUI alternative (Event Viewer -> Security -> Filter Current Log -> XML tab):
+
+```xml
+<QueryList><Query Id="0" Path="Security"><Select Path="Security">
+*[System[(EventID=4624)]]
+and *[EventData[Data[@Name='TargetUserName']='svc-admin']]
+and *[EventData[Data[@Name='LogonType']='3']]
+and *[EventData[Data[@Name='AuthenticationPackageName']='NTLM']]
+and *[EventData[Data[@Name='IpAddress']='192.168.77.3']]
+</Select></Query></QueryList>
+```
+
+Sort oldest first, take the first entry after the 1102 time. `<TimeCreated SystemTime>`
+is already UTC.
+
+**Flag:** `nexsec2026{<RecordID>;<TargetLogonId>;<UTC_timestamp>}`  (if the ISO `...T..Z`
+form is rejected, try `YYYY-MM-DD HH:MM:SS`)
