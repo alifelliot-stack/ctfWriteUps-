@@ -373,6 +373,35 @@ is already UTC.
 **Flag:** `nexsec2026{<RecordID>;<TargetLogonId>;<UTC_timestamp>}`  (if the ISO `...T..Z`
 form is rejected, try `YYYY-MM-DD HH:MM:SS`)
 
+#### Manual method (Event Viewer only, no PowerShell)
+
+Use this when the custom XML filter throws the "channel path invalid" error on a saved log.
+
+1. **Open the saved log:** Event Viewer -> Action -> **Open Saved Log** -> browse to
+   `...\jumpseat-evidence\C\Windows\System32\winevt\Logs\Security.evtx`.
+2. **Filter to logons:** right pane -> **Filter Current Log** -> set **Event ID** to `4624`
+   -> OK. (Use the simple filter, not Create Custom View.)
+3. **Sort oldest first:** click the **Date and Time** column header until the arrow points
+   up (oldest at the top). You want the *earliest* match, so start from the top, but only
+   consider events **after** the 1102 clear time.
+4. **Open each 4624 and check the General tab** for all four conditions:
+   - **New Logon -> Account Name** = `svc-admin` (not the Subject account)
+   - **Logon Type** = `3`
+   - **Network Information -> Source Network Address** = `192.168.77.3`
+   - **Detailed Authentication Information -> Authentication Package** = `NTLM`
+5. **The first event (top-down) that matches all four is your answer.**
+6. **Read the three values** from that event:
+   - General tab -> note the **Logged** time, then convert to UTC if your box is not UTC.
+   - **Details** tab -> **XML View**:
+     - `<EventRecordID>…</EventRecordID>` = Record ID
+     - `<Data Name="TargetLogonId">0x…</Data>` = Logon ID (New Logon > Logon ID)
+     - `<TimeCreated SystemTime="…Z">` = the event time already in **UTC**
+
+Tip: the `SystemTime` in XML view is UTC, so use that string directly for the timestamp
+rather than converting the local "Logged" time by hand.
+
+**Flag:** `nexsec2026{<EventRecordID>;<TargetLogonId>;<SystemTime UTC>}`
+
 ---
 
 ## Troubleshooting
