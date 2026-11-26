@@ -363,3 +363,37 @@ is already UTC.
 
 **Flag:** `nexsec2026{<RecordID>;<TargetLogonId>;<UTC_timestamp>}`  (if the ISO `...T..Z`
 form is rejected, try `YYYY-MM-DD HH:MM:SS`)
+
+---
+
+## Troubleshooting
+
+### "The specified channel path is invalid (15000)"
+
+Happens when you paste a custom **XML filter** (with `Path="Security"`) while viewing a
+**saved `.evtx` file** from the triage. The XML query points at the live Security
+channel, which does not exist in that context, so Event Viewer errors out.
+
+Fix 1 (best) — query the file directly in PowerShell with `-Path`:
+
+```powershell
+$log = 'C:\path\to\triage\C\Windows\System32\winevt\Logs\Security.evtx'
+Get-WinEvent -Path $log | ? Id -eq 4624 | % {
+  $x=[xml]$_.ToXml(); $d=$x.Event.EventData.Data
+  [pscustomobject]@{
+    Time=$_.TimeCreated; Record=$_.RecordId
+    User=($d|?{$_.Name -eq 'TargetUserName'}).'#text'
+    Type=($d|?{$_.Name -eq 'LogonType'}).'#text'
+    Auth=($d|?{$_.Name -eq 'AuthenticationPackageName'}).'#text'
+    IP  =($d|?{$_.Name -eq 'IpAddress'}).'#text'
+    LogonId=($d|?{$_.Name -eq 'TargetLogonId'}).'#text'
+  }
+} | ? { $_.User -eq 'svc-admin' -and $_.Type -eq '3' -and $_.Auth -eq 'NTLM' -and $_.IP -eq '192.168.77.3' } |
+  Sort Time | Select Record,LogonId,@{n='UTC';e={$_.Time.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')}} -First 1
+```
+
+Find the log path if unknown: `Get-ChildItem -Recurse -Filter Security.evtx C:\ 2>$null | Select FullName`
+
+Fix 2 (GUI) — use **Filter Current Log** (not "Create Custom View") on the open saved
+log. The simple filter (Event ID `4624`) works on saved logs; it cannot match EventData
+fields, so scroll the results for svc-admin / Type 3 / NTLM / 192.168.77.3.
