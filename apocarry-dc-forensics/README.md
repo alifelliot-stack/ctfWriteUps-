@@ -29,6 +29,76 @@ Then confirm it is the attacker session by the timeline: that RDP logon happens
 
 ---
 
+## Fast path: pivot from the 1102 log-clear event
+
+This is the shortest route once you have found Event 1102. The log-clear event names
+the account that did it and, more importantly, the **Logon ID** of the session. That
+Logon ID links the wipe straight back to the logon that carries the source IP.
+
+### Step A — Read the 1102 event details
+
+Open the 1102 event (Security log), Details tab. In this incident it showed:
+
+```
+LogFileCleared
+  SubjectUserSid    : S-1-5-21-357959444-3534398086-3571024275-1001
+  SubjectUserName   : svc-admin
+  SubjectDomainName : SKY-JMP01
+  SubjectLogonId    : 0x1dcb2
+```
+
+So `svc-admin` cleared the log. Note **SubjectLogonId `0x1dcb2`** and the event's
+timestamp (General tab) as your "logs cleared" anchor. (SKY-JMP01 is the Jump Seat
+jump host.)
+
+### Step B — Follow the Logon ID into the 4624
+
+Find the 4624 whose **New Logon > Logon ID** equals the SubjectLogonId above. That is
+the logon that opened this session, and it carries the source IP and logon type:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security';Id=4624} | ForEach-Object {
+  $x=[xml]$_.ToXml(); $d=$x.Event.EventData.Data
+  if( ($d|?{$_.Name -eq 'TargetLogonId'}).'#text' -eq '0x1dcb2' ){
+    [pscustomobject]@{
+      Time =$_.TimeCreated
+      Acct =($d|?{$_.Name -eq 'TargetUserName'}).'#text'
+      Type =($d|?{$_.Name -eq 'LogonType'}).'#text'    # expect 10 = RDP
+      IP   =($d|?{$_.Name -eq 'IpAddress'}).'#text'    # the source IPv4
+    } } }
+```
+
+In the GUI instead: filter Security for 4624, open each, match **New Logon > Logon ID**
+to `0x1DCB2`. Read **Account Name**, **Logon Type** (should be 10), and
+**Source Network Address**.
+
+### Step C — Confirm the pair appears in Terminal Services too
+
+The question wants the pair present in **both** record sets. Check that the same
+`svc-admin + IP` also shows in the Terminal Services 1149 records:
+
+```powershell
+Get-WinEvent -LogName 'Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational' |
+  Where-Object Id -eq 1149 | ForEach-Object {
+    $x=[xml]$_.ToXml()
+    [pscustomobject]@{ Time=$_.TimeCreated; User=$x.Event.UserData.EventXML.Param1; IP=$x.Event.UserData.EventXML.Param3 }
+  } | Where-Object User -like '*svc-admin*'
+```
+
+### Step D — Timeline check and flag
+
+Confirm that 4624 time is before the `winupdate.exe` prefetch run and before the 1102
+clear time (it will be, since this session did the wipe). Then:
+
+```
+nexsec26{svc-admin;<source IPv4 from the 4624 with Logon ID 0x1dcb2>}
+```
+
+> The generic cross-reference method below reaches the same answer from scratch if you
+> have not found the 1102 event yet.
+
+---
+
 ## The 4 artifacts
 
 | Artifact | Log / path | Pull these fields |
