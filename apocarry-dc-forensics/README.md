@@ -85,14 +85,46 @@ Get-WinEvent -LogName 'Microsoft-Windows-TerminalServices-RemoteConnectionManage
   } | Where-Object User -like '*svc-admin*'
 ```
 
-### Step D — Timeline check and flag
+### Step D — Important: the RDP pair is NOT always the account that cleared logs
 
-Confirm that 4624 time is before the `winupdate.exe` prefetch run and before the 1102
-clear time (it will be, since this session did the wipe). Then:
+`svc-admin` cleared the logs (the 1102 event), but Q1 asks for the `account + IPv4`
+that appears in **both** the Terminal Services records and the 4624 logons, i.e. the
+**RDP session** that precedes the wipe. In this incident the Terminal Services 1149
+record showed a different account:
 
 ```
-nexsec26{svc-admin;<source IPv4 from the 4624 with Logon ID 0x1dcb2>}
+Event 1149 (TerminalServices-RemoteConnectionManager)
+  Param1 (User) : it-helpdesk
+  Param3 (IP)   : 192.168.77.5
+  Logged        : 10/17/2026 04:54
 ```
+
+So the attacker RDP'd in as `it-helpdesk` from `192.168.77.5`, then later cleared logs
+as `svc-admin`. The answer pair is the RDP one: **`it-helpdesk` / `192.168.77.5`**.
+
+Verify that exact pair also exists as a 4624 Type 10 (every real RDP logon does):
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security';Id=4624} | % {
+  $x=[xml]$_.ToXml(); $d=$x.Event.EventData.Data
+  $acct=($d|?{$_.Name -eq 'TargetUserName'}).'#text'
+  $ip  =($d|?{$_.Name -eq 'IpAddress'}).'#text'
+  $type=($d|?{$_.Name -eq 'LogonType'}).'#text'
+  if($acct -eq 'it-helpdesk' -and $ip -eq '192.168.77.5'){
+    [pscustomobject]@{Time=$_.TimeCreated; Acct=$acct; Type=$type; IP=$ip} } }
+```
+
+A returned row with `Type = 10` confirms it is in both sets. Check its time is before
+the `winupdate.exe` prefetch run and before the 1102 clear.
+
+### Step E — Flag
+
+```
+nexsec26{it-helpdesk;192.168.77.5}
+```
+
+If a team's evidence shows different values, use the account and IPv4 from the 1149
+record that also matches a 4624 Type 10 and precedes the winupdate.exe run and 1102.
 
 > The generic cross-reference method below reaches the same answer from scratch if you
 > have not found the 1102 event yet.
