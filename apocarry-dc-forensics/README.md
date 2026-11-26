@@ -310,17 +310,26 @@ rundll32.exe C:\Windows\System32\comsvcs.dll, MiniDump 860 C:\Windows\Temp\lsass
 
 ### Q — winupdate.exe SHA-1 + tool family
 
-Static analysis only (never run the sample):
+Static analysis only (never run the sample).
+
+SHA-1 (this incident): `0ae6c11cb3eb730a866cf5b1fbc79079879c3549`
 
 ```bash
 sha1sum winupdate.exe                                     # SHA-1
 exiftool winupdate.exe                                    # PE version info: OriginalFilename, ProductName
 strings -n 6 winupdate.exe | grep -iE 'scan|usage|version|http'   # tool banner / usage
 ```
-Windows: `Get-FileHash -Algorithm SHA1 winupdate.exe`, and Properties -> Details tab for
-the version resource. The `-sn <cidr>` usage points to a network/host-discovery scanner.
 
-**Flag:** `nexsec2026{<sha1>;<toolname>}`
+Windows:
+```powershell
+Get-FileHash -Algorithm SHA1 winupdate.exe
+(Get-Item winupdate.exe).VersionInfo | Format-List *     # OriginalFilename / ProductName name the tool
+```
+Also Properties -> Details tab shows the version resource. The `-sn <cidr>` usage points
+to a network/host-discovery scanner (look for nmap / masscan / SoftPerfect / Advanced IP
+Scanner / fscan in the metadata or strings).
+
+**Flag:** `nexsec2026{0ae6c11cb3eb730a866cf5b1fbc79079879c3549;<toolname>}`
 
 ### Q — earliest 4624 (svc-admin, Type 3, NTLM, 192.168.77.3) after the 1102 clear
 
